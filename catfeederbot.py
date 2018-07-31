@@ -1,7 +1,7 @@
 from firebase import firebase
 firebase = firebase.FirebaseApplication('https://catfeeder-38829.firebaseio.com/', None)
-import datetime
 
+import datetime
 import RPi.GPIO as GPIO
 import time
 pulse_duration = 0
@@ -12,6 +12,7 @@ us_depan_trigger = 13
 us_depan_echo = 15
 us_atas_trigger = 7
 us_atas_echo = 12
+
 
 GPIO.setmode(GPIO.BOARD)
 GPIO.setup(03, GPIO.OUT)
@@ -24,12 +25,12 @@ GPIO.setup(37, GPIO.IN)
 input_value = GPIO.input(35)
 input_value2 = GPIO.input(37)
 
-
-def scan_us(trigger, echo):
+statfeed = False
+condition = 'morning'
+def scan_us(trigger, echo):	
 	GPIO.setmode(GPIO.BOARD)
 	PIN_TRIGGER = trigger
 	PIN_ECHO = echo
-
 	GPIO.setup(PIN_TRIGGER, GPIO.OUT)
 	GPIO.setup(PIN_ECHO, GPIO.IN)
 
@@ -81,14 +82,14 @@ def SetAngle(angle):
 	time.sleep(0.500)
 	GPIO.output(03, False)
 	pwm.ChangeDutyCycle(0)
-	
+
 def openBucket():
 	SetAngle(35)
 	time.sleep(1)
 	SetAngle(55)
 	time.sleep(1)
 	st = datetime.datetime.fromtimestamp(time.time()).strftime('%Y-%m-%d %H:%M:%S')
-	firebase.post('feeders/w4ly4dU291Y6cXDIju9j3BBAfZh1/message/', st + ' success open bucket')
+	firebase.put(dblink,'allert', st + ' success open bucket')
 	time.sleep(.500)
 	
 def scandepan():
@@ -109,64 +110,91 @@ def bowl():
 	GPIO.setup(37, GPIO.IN)
 	bowlstat = GPIO.input(37)
 	return bowlstat
-	
-def autoMode():
-	evening = firebase.get('feeders/w4ly4dU291Y6cXDIju9j3BBAfZh1/feedTime','eveningFeed')
-	morning = firebase.get('feeders/w4ly4dU291Y6cXDIju9j3BBAfZh1/feedTime','morningFeed')
+
+def getTime():
 	localtime = time.localtime(time.time())	
 	minute = str(localtime.tm_min)
 	if len(minute) == 1:
 		minute = '0'+minute
 	timeNow = int(str(localtime.tm_hour)+minute)
-	print timeNow, evening, morning
+	return timeNow
+def autoMode():
+	global statfeed
+	global condition
+	global dblink
+	evening = firebase.get(dblink + 'feedTime','eveningFeed')
+	morning = firebase.get(dblink + 'feedTime','morningFeed')
+	
+	if (getTime() == evening - 1) or (getTime() == morning - 1):
+		statfeed = False
+	#print getTime(), evening, morning
 	iscat = 'default'
-	if (timeNow == evening) or (timeNow == morning):
-		while timeNow < (evening + 5) or timeNow < (morning + 5):
-			if scandepan()< 20:
+	if ((getTime() == evening) or (getTime() == morning)) and statfeed == False:
+		if getTime() == evening :
+			condition = 'evening'
+		if getTime() == morning :
+			condition = 'morning'
+		while getTime() < (evening + 4) or getTime() < (morning + 4):
+			if scandepan() < 25:
 				while not iscat == True:
-					print "nunggu stat kucing"		
-					iscat = firebase.get('feeders/w4ly4dU291Y6cXDIju9j3BBAfZh1/','isCatDeepLens')
+					#print "nunggu stat kucing", scandepan()
+					iscat = firebase.get(dblink,'isCatDeepLens')
 					if iscat == False:
 						fire()
-						firebase.put('feeders/w4ly4dU291Y6cXDIju9j3BBAfZh1/','isCatDeepLens','default')
-						firebase.post('feeders/w4ly4dU291Y6cXDIju9j3BBAfZh1/message/', st + ' success activate water canon')
-					if timeNow == (evening + 5) or timeNow == (morning + 5):
 						st = datetime.datetime.fromtimestamp(time.time()).strftime('%Y-%m-%d %H:%M:%S')
-						firebase.post('feeders/w4ly4dU291Y6cXDIju9j3BBAfZh1/message/', st + ' no cat detected')						
-						return
+						firebase.put(dblink,'isCatDeepLens','default')
 				if bowl() == 0:
 					st = datetime.datetime.fromtimestamp(time.time()).strftime('%Y-%m-%d %H:%M:%S')
-					firebase.post('feeders/w4ly4dU291Y6cXDIju9j3BBAfZh1/message/', st + ' bowl is not empty')
+					firebase.put(dblink,'allert', st + ' fail to open bucket bowl is not empty')
 					time.sleep(1)
 				if bowl() == 1:
-					openBucket()								
-				while scanatas() > 30 :
-					print "nunggu makan"
-					time.sleep(.250)
+					openBucket()	
+					statfeed = True				
+				while scanatas() > 15 and scandepan() > 25:
+					if getTime() == (evening + 4) or getTime() == (morning + 4):
+						st = datetime.datetime.fromtimestamp(time.time()).strftime('%Y-%m-%d %H:%M:%S')
+						firebase.post(dblink + 'message/', st + " your cat hasn't been fed this " + condition)						
+						return
 				st = datetime.datetime.fromtimestamp(time.time()).strftime('%Y-%m-%d %H:%M:%S')
-				firebase.post('feeders/w4ly4dU291Y6cXDIju9j3BBAfZh1/message/', st + ' cat is eating')						
+				firebase.post(dblink + 'message/', st + ' cat is eating')						
 				time.sleep(1)
-				firebase.put('feeders/w4ly4dU291Y6cXDIju9j3BBAfZh1/','lastfeed', st)
-				return		
-			
-				
-				
+				firebase.put(dblink,'lastfeed', st)
+				return				
+			if getTime() == (evening + 4) or getTime() == (morning + 4):
+				st = datetime.datetime.fromtimestamp(time.time()).strftime('%Y-%m-%d %H:%M:%S')
+				firebase.post(dblink + 'message/', st + " your cat hasn't been fed this " + condition)						
+				return
+								
 	
 def manualMode():
-	gate = firebase.get('feeders/w4ly4dU291Y6cXDIju9j3BBAfZh1','openBucket')	
+	global dblink
+	gate = firebase.get(dblink,'openBucket')	
 	if gate == True and bowl() == 1:
 		openBucket()
-		firebase.put('feeders/w4ly4dU291Y6cXDIju9j3BBAfZh1','openBucket', False)		
+		st = datetime.datetime.fromtimestamp(time.time()).strftime('%Y-%m-%d %H:%M:%S')
+		firebase.put(dblink,'openBucket', False)
+		firebase.put(dblink,'lastfeed', st)		
 	if gate == True and bowl() == 0:
 		st = datetime.datetime.fromtimestamp(time.time()).strftime('%Y-%m-%d %H:%M:%S')
-		firebase.put('feeders/w4ly4dU291Y6cXDIju9j3BBAfZh1','openBucket', False)
-		firebase.post('feeders/w4ly4dU291Y6cXDIju9j3BBAfZh1/message/', st + ' fail to open bucket, bowl is not empty')
+		firebase.put(dblink,'openBucket', False)
+		firebase.put(dblink,'allert', st + ' fail to open bucket bowl is not empty')
 
-while True:	
-	firebase.put('feeders/w4ly4dU291Y6cXDIju9j3BBAfZh1/','bowlstat',bowl())
-	firebase.put('feeders/w4ly4dU291Y6cXDIju9j3BBAfZh1/','isCatDeepLens','default')
-	mode = firebase.get('feeders/w4ly4dU291Y6cXDIju9j3BBAfZh1','autoControl')
-	firebase.put('feeders/w4ly4dU291Y6cXDIju9j3BBAfZh1','foodLevel', levelFood())
+def checkCon():
+	firebase.put(dblink,'connectStat', True)
+	time.sleep(1)
+	firebase.put(dblink,'connectStat', False)
+	firebase.put(dblink,'connectReq', False)
+	
+while True:
+	key = firebase.get('login/', 'currentUser')
+	dblink = 'feeders/'+key + '/'
+	conreq = firebase.get(dblink,'connectReq')
+	if conreq == 'ping':
+		checkCon()
+	firebase.put(dblink,'bowlstat',bowl())
+	firebase.put(dblink,'isCatDeepLens','default')
+	mode = firebase.get(dblink,'autoControl')
+	firebase.put(dblink,'foodLevel', levelFood())
 	if mode == False:
 		manualMode()
 	if mode == True:
